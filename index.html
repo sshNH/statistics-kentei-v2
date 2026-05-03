@@ -115,6 +115,41 @@
   .badge.today { background: var(--red); color: white; }
   .badge.soon { background: #dbeafe; color: #1e40af; }
   .summary-text { font-size: 12.5px; line-height: 1.65; color: #334155; word-break: break-word; }
+  .summary-text .item-ref {
+    cursor: pointer;
+    color: var(--accent-dark);
+    text-decoration: none;
+    border-bottom: 1px dashed transparent;
+    transition: border-color .15s, background .15s;
+    padding: 0 2px;
+    border-radius: 3px;
+  }
+  .summary-text .item-ref:hover {
+    background: var(--accent-bg);
+    border-bottom-color: var(--accent-dark);
+  }
+
+  /* キーワード結果も同じ仕組み */
+  .keyword-result .item-ref {
+    cursor: pointer;
+    color: var(--accent-dark);
+    border-bottom: 1px dashed transparent;
+    padding: 0 2px;
+    border-radius: 3px;
+  }
+  .keyword-result .item-ref:hover {
+    background: var(--accent-bg);
+    border-bottom-color: var(--accent-dark);
+  }
+
+  /* ジャンプ後のハイライト */
+  tr.row-highlight td {
+    background: #fff3cd !important;
+    transition: background 1.5s ease-out;
+  }
+  tr.row-highlight-fading td {
+    background: transparent !important;
+  }
 
   /* 検索 */
   .search-input, .keyword-input, .date-input, .count-input, .text-input, textarea, select {
@@ -420,8 +455,8 @@
       <label class="dialog-label">所要時間</label>
       <div class="time-grid" id="timeGrid">
         <button class="time-btn" data-t="3">10分以内</button>
-        <button class="time-btn" data-t="2">10-20分</button>
-        <button class="time-btn" data-t="1">20-30分</button>
+        <button class="time-btn" data-t="3">10-20分</button>
+        <button class="time-btn" data-t="2">20-30分</button>
         <button class="time-btn" data-t="0">30分超</button>
       </div>
     </div>
@@ -604,8 +639,8 @@ function computeNextSrs(prevState, newScore) {
 
 function timeToScore(minutes) {
   if (minutes <= 10) return 3;
-  if (minutes <= 20) return 2;
-  if (minutes <= 30) return 1;
+  if (minutes <= 20) return 3;
+  if (minutes <= 30) return 2;
   return 0;
 }
 
@@ -879,7 +914,7 @@ function renderSummary() {
     if (!b || !grouped[b]) continue;
     const folder = findFolder(it.folderId);
     const fname = folder ? folder.shortName : '?';
-    grouped[b].push({ id: it.id, label: `${fname}${it.displayLabel}`, diff });
+    grouped[b].push({ id: it.id, folderId: it.folderId, label: `${fname}${it.displayLabel}`, diff });
   }
   const grid = document.getElementById('summaryGrid');
   grid.innerHTML = SUMMARY_BUCKETS.map((b, i) => {
@@ -889,12 +924,28 @@ function renderSummary() {
     if (b === '期限切れ') { cls = 'urgent'; badgeCls = 'urgent'; }
     else if (b === '当日') { cls = 'today'; badgeCls = 'today'; }
     else if (['1日前','2日前'].includes(b)) { cls = 'soon'; badgeCls = 'soon'; }
-    const text = list.length ? list.map(x => x.label).join('、') + ` ⇒ 合計${list.length}問` : '該当なし ⇒ 合計0問';
+    let textHtml;
+    if (list.length === 0) {
+      textHtml = '該当なし ⇒ 合計0問';
+    } else {
+      const refs = list.map(x =>
+        `<span class="item-ref" data-jump-folder="${escapeHtml(x.folderId)}" data-jump-id="${escapeHtml(x.id)}">${escapeHtml(x.label)}</span>`
+      ).join('、');
+      textHtml = refs + ` ⇒ 合計${list.length}問`;
+    }
     return `<div class="summary-item ${cls}">
       <div class="summary-head"><strong>${b}</strong><span class="badge ${badgeCls}">${list.length}問</span></div>
-      <div class="summary-text">${escapeHtml(text)}</div>
+      <div class="summary-text">${textHtml}</div>
     </div>`;
   }).join('');
+  // クリックでジャンプ
+  grid.querySelectorAll('.item-ref').forEach(el => {
+    el.addEventListener('click', () => {
+      const fid = el.getAttribute('data-jump-folder');
+      const iid = el.getAttribute('data-jump-id');
+      jumpToItem(fid, iid);
+    });
+  });
 }
 
 function extractKeywords(text) {
@@ -950,22 +1001,25 @@ function renderKeywordResult() {
   const box = document.getElementById('keywordResult');
   const q = (state.keywordQuery || '').trim().toLowerCase();
   if (!q) { box.textContent = 'キーワードを入力するか、左の候補を押してください。'; return; }
-  const groups = buildKeywordGroups();
-  const exact = groups.find(g => g.keyword.toLowerCase() === q);
-  if (exact) {
-    box.textContent = `${exact.keyword} ⇒ ${exact.refs.join('、')}（合計${exact.count}問）`;
+  // 検索対象アイテム
+  const matched = getAllItems().filter(it =>
+    (((it.content||'') + ' ' + (it.note||'')).toLowerCase().includes(q))
+  );
+  if (matched.length === 0) {
+    box.textContent = '一致する共通キーワードは見つかりませんでした。';
     return;
   }
-  const matched = getAllItems().filter(it => (((it.content||'') + ' ' + (it.note||'')).toLowerCase().includes(q)));
-  if (matched.length) {
-    const refs = matched.map(it => {
-      const folder = findFolder(it.folderId);
-      return `${folder ? folder.shortName : '?'}${it.displayLabel}`;
+  const refs = matched.map(it => {
+    const folder = findFolder(it.folderId);
+    const fname = folder ? folder.shortName : '?';
+    return `<span class="item-ref" data-jump-folder="${escapeHtml(it.folderId)}" data-jump-id="${escapeHtml(it.id)}">${escapeHtml(fname + it.displayLabel)}</span>`;
+  }).join('、');
+  box.innerHTML = `${escapeHtml(state.keywordQuery)} ⇒ ${refs}（合計${matched.length}問）`;
+  box.querySelectorAll('.item-ref').forEach(el => {
+    el.addEventListener('click', () => {
+      jumpToItem(el.getAttribute('data-jump-folder'), el.getAttribute('data-jump-id'));
     });
-    box.textContent = `${state.keywordQuery} ⇒ ${refs.join('、')}（合計${refs.length}問）`;
-    return;
-  }
-  box.textContent = '一致する共通キーワードは見つかりませんでした。';
+  });
 }
 
 function renderFolderGrid() {
@@ -1022,6 +1076,36 @@ function openFolder(id) {
   document.getElementById('folderSearchInput').value = '';
   renderFolderView();
   window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+// 上部集計やキーワード結果から特定の問題行へジャンプ
+function jumpToItem(folderId, itemId) {
+  if (!folderId || !itemId) return;
+  // フォルダ詳細画面に遷移（既に居る場合は再描画なしでOK）
+  if (state.currentFolderId !== folderId) {
+    state.currentFolderId = folderId;
+    state.folderQuery = '';
+    document.getElementById('folderSearchInput').value = '';
+    renderFolderView();
+  }
+  // DOM描画完了を少し待ってからスクロール&ハイライト
+  setTimeout(() => {
+    const row = document.querySelector(`tr[data-row-id="${CSS.escape(itemId)}"]`);
+    if (!row) return;
+    // ヘッダ分のオフセットを考慮してスクロール
+    const rect = row.getBoundingClientRect();
+    const targetY = window.scrollY + rect.top - 140;
+    window.scrollTo({ top: targetY, behavior: 'smooth' });
+    // ハイライト → 1.2秒後にフェードアウト → 2.5秒後にクラス除去
+    row.classList.remove('row-highlight-fading');
+    row.classList.add('row-highlight');
+    setTimeout(() => {
+      row.classList.add('row-highlight-fading');
+    }, 1200);
+    setTimeout(() => {
+      row.classList.remove('row-highlight', 'row-highlight-fading');
+    }, 2700);
+  }, 50);
 }
 
 function renderFolderView() {
